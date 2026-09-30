@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright
 
 # --- 环境变量 ---
 COOKIE_VALUE = os.environ.get('COOKIE_VALUE') or ""    # remember_web cookie 值，必填
-EMAIL        = os.environ.get('EMAIL') or ""           # 登录邮箱,可选，作为备用,TG通知需要填写
+EMAIL        = os.environ.get('EMAIL') or ""            # 登录邮箱,可选，作为备用,TG通知需要填写
 PASSWORD     = os.environ.get('PASSWORD') or ""        # 登录密码,可选，作为备用
 TG_BOT_TOKEN = os.environ.get('TG_BOT_TOKEN') or ""    # Telegram Bot Token,可选
 TG_CHAT_ID   = os.environ.get('TG_CHAT_ID') or ""      # Telegram Chat ID,可选
@@ -33,7 +33,6 @@ def get_current_ip(proxy_server=None):
     proxies = {"http": proxy_server, "https": proxy_server} if (proxy_server and IS_PROXY) else None
     try:
         resp = requests.get("https://api.ip.sb/ip", proxies=proxies, timeout=15)
-        # log(f"请求出口IP完成, status={resp.status_code}")
         if resp.status_code == 200:
             return resp.text.strip()
         return "获取失败"
@@ -46,8 +45,7 @@ def send_telegram_notification(status, old_due, new_due):
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         log("⚠️ Telegram 未配置，跳过通知")
         return False
-    
-    # 获取运行时间
+     
     local_time = time.gmtime(time.time() + 8 * 3600)
     now = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
     if '@' in EMAIL:
@@ -216,7 +214,6 @@ def get_due_date(page):
     return "未知"
 
 def renew_service(page):
-
     try:
         log("➡ 进入续期流程...")
         if page.url != SERVICE_URL:
@@ -260,16 +257,21 @@ def renew_service(page):
             page.screenshot(path="renew_modal_failed.png")
             return False
 
+        # 🛡️ 核心修复：弹窗弹出后，必须先处理弹窗内的 Cloudflare 人机验证！
+        log("🛡 检查并处理续费弹窗内的 Cloudflare 验证...")
         handle_cloudflare(page)
+
         log("🖱️ 点击 'Create Invoice'...")
-        create_btn.click()
+        create_btn.click(force=True)
 
         new_invoice_url = None
         start_wait = time.time()
         while time.time() - start_wait < 90:
-            if "/payment/invoice/" in page.url:
-                new_invoice_url = page.url
-                log(f"🎉 页面已跳转: {new_invoice_url}")
+            current_url = page.url
+            # 放宽发票/支付页面的 URL 匹配条件
+            if any(k in current_url.lower() for k in ["invoice", "pay", "billing"]):
+                new_invoice_url = current_url
+                log(f"🎉 页面已跳转到发票/支付页: {new_invoice_url}")
                 break
             if page.locator('iframe[src*="challenges.cloudflare.com"]').count() > 0:
                 log("⚠️ 遇到拦截，尝试处理...")
@@ -288,7 +290,7 @@ def renew_service(page):
         log("🔎 查找 'Pay' 按钮...")
         pay_btn = page.locator('a:has-text("Pay"):visible, button:has-text("Pay"):visible').first
         pay_btn.wait_for(state="visible", timeout=30000)
-        pay_btn.click()
+        pay_btn.click(force=True)
         log("✅ 'Pay' 按钮已点击。")
 
         # 等待支付确认页面或跳转回服务页
