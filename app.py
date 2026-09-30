@@ -267,31 +267,52 @@ def renew_service(page):
 
         handle_cloudflare(page)
         log("🖱️ 点击 'Create Invoice'...")
-        create_btn.click(force=True)
-
+        
         new_invoice_url = None
-        start_wait = time.time()
-        while time.time() - start_wait < 90:
-            if "/payment/invoice/" in page.url:
-                new_invoice_url = page.url
-                log(f"🎉 页面已跳转: {new_invoice_url}")
-                break
-            if page.locator('iframe[src*="challenges.cloudflare.com"]').count() > 0:
-                log("⚠️ 遇到拦截，尝试处理...")
-                handle_cloudflare(page)
-            time.sleep(1)
+        context = page.context
+        
+        # 尝试通过监听新标签页或者当前页跳转来捕获发票链接
+        try:
+            with context.expect_page(timeout=5000) as new_page_info:
+                create_btn.click(force=True)
+            new_page = new_page_info.value
+            new_page.wait_for_load_state("domcontentloaded")
+            new_invoice_url = new_page.url
+            log(f"🎉 发票在新标签页打开: {new_invoice_url}")
+            page = new_page
+        except Exception:
+            create_btn.click(force=True)
+            
+            start_wait = time.time()
+            while time.time() - start_wait < 60:
+                current_url = page.url
+                log(f"⏳ 当前 URL: {current_url}")
+                if any(keyword in current_url.lower() for keyword in ["invoice", "pay", "billing"]):
+                    new_invoice_url = current_url
+                    log(f"🎉 页面已跳转到发票/支付页: {new_invoice_url}")
+                    break
+                
+                if page.locator('a:has-text("Pay"), button:has-text("Pay")').count() > 0:
+                    new_invoice_url = page.url
+                    log(f"🎉 检测到支付按钮已在当前页渲染: {new_invoice_url}")
+                    break
+                    
+                if page.locator('iframe[src*="challenges.cloudflare.com"]').count() > 0:
+                    log("⚠️️ 遇到 Cloudflare 拦截，尝试处理...")
+                    handle_cloudflare(page)
+                time.sleep(2)
 
         if not new_invoice_url:
             log("❌ 未能进入发票页面，超时。")
             page.screenshot(path="renew_stuck_invoice.png")
             return False
 
-        if page.url != new_invoice_url:
+        if page.url != new_invoice_url and "invoice" in new_invoice_url.lower():
             page.goto(new_invoice_url)
         handle_cloudflare(page)
 
-        log("🔎 查找 'Pay' 按钮...")
-        pay_btn = page.locator('a:has-text("Pay"):visible, button:has-text("Pay"):visible').first
+        log("🔎 查找并点击 'Pay' 按钮...")
+        pay_btn = page.locator('a:has-text("Pay"):visible, button:has-text("Pay"):visible, input[value="Pay"]:visible').first
         pay_btn.wait_for(state="visible", timeout=30000)
         pay_btn.click(force=True)
         log("✅ 'Pay' 按钮已点击。")
