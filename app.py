@@ -1,14 +1,16 @@
 import time
 import os
+import json
+import re
 import requests
 from playwright.sync_api import sync_playwright
 
 # ==================== 配置项 ====================
 LOGIN_URL = "https://dash.hidencloud.com/login"
-SERVICE_URL = "https://dash.hidencloud.com/service/232643/manage"  # 你的服务管理页URL
-EMAIL = "your_email@example.com"       # 如果有Cookie登录可以忽略
-PASSWORD = "your_password"
-USE_COOKIE = True                       # 是否尝试从文件加载Cookie登录
+SERVICE_URL = "https://dash.hidencloud.com/service/232643/manage"  # 你的服务管理页 URL
+EMAIL = "your_email@example.com"       # 账号（如果 Cookie 失效会使用）
+PASSWORD = "your_password"             # 密码
+USE_COOKIE = True                       # 是否优先尝试 Cookie 登录
 COOKIE_FILE = "cookies.json"
 
 # Telegram 通知配置（可选）
@@ -38,7 +40,7 @@ def handle_cloudflare(page):
     """检测并等待 Cloudflare 盾通过"""
     try:
         if page.locator('iframe[src*="challenges.cloudflare.com"]').count() > 0 or "Just a moment" in page.title():
-            log("🛡️ 检测到 Cloudflare 验证，等待人工或自动通过...")
+            log("🛡️ 检测到 Cloudflare 验证，等待通过...")
             for _ in range(30):
                 if page.locator('iframe[src*="challenges.cloudflare.com"]').count() == 0 and "Just a moment" not in page.title():
                     log("✅ Cloudflare 验证已通过")
@@ -58,16 +60,12 @@ def get_due_date(page):
             page.goto(SERVICE_URL, wait_until="domcontentloaded", timeout=60000)
             handle_cloudflare(page)
         
-        # 尝试从页面文本或特定元素中匹配到期日期格式 (例如: 01 Oct 2026)
         content = page.content()
-        # 这里可以使用更精准的选择器，如果找不到则返回页面关键片段
-        # 示例：假设到期日在某个特定标签内，或者直接正则匹配
-        import re
-        # 常见日期格式如 DD MMM YYYY
+        # 匹配常见日期格式 (例如: 01 Oct 2026)
         match = re.search(r'(\d{2}\s+[A-Za-z]{3}\s+\d{4})', content)
         if match:
             due_date = match.group(1)
-            log(f"📅 获取到Due Date: {due_date}")
+            log(f"📅 获取到 Due Date: {due_date}")
             return due_date
     except Exception as e:
         log(f"⚠️ 获取到期时间失败: {e}")
@@ -80,9 +78,8 @@ def renew_service(page):
             page.goto(SERVICE_URL, wait_until="domcontentloaded", timeout=60000)
         handle_cloudflare(page)
 
-        log("🖱️ 准备定位并点击 'Renew' 按钮...")
+        log("🖱️ 寻找并点击 'Renew' 按钮...")
         renew_btn = page.locator('button:has-text("Renew"), a:has-text("Renew"), [role="button"]:has-text("Renew")').first
-        create_btn = page.locator('button:has-text("Create Invoice"), a:has-text("Create Invoice")').first
 
         modal_opened = False
         for i in range(3):
@@ -100,26 +97,23 @@ def renew_service(page):
                     page.screenshot(path="renew_not_allowed.png")
                     return "NOT_TIME"
 
-                log("🖲️ 等待弹窗或发票创建按钮出现...")
-                try:
-                    create_btn.wait_for(state="visible", timeout=5000)
+                # 检查弹窗中的 Create Invoice 按钮是否存在
+                create_btn = page.locator('button:has-text("Create Invoice"), a:has-text("Create Invoice")').first
+                if create_btn.is_visible():
                     modal_opened = True
-                    log("✅ 弹窗已成功弹出！")
+                    log("✅ 续费弹窗已成功弹出！")
                     break
-                except:
-                    log("⚠️ 弹窗未出现，尝试使用 JS 强制点击 Renew...")
-                    try:
-                        renew_btn.evaluate("el => el.click()")
-                        time.sleep(2)
-                        if create_btn.is_visible():
-                            modal_opened = True
-                            log("✅ JS 强制点击成功，弹窗已弹出！")
-                            break
-                    except Exception:
-                        pass
+                else:
+                    log("⚠️ 弹窗未出现，尝试 JS 强制点击 Renew...")
+                    renew_btn.evaluate("el => el.click()")
                     time.sleep(2)
+                    if create_btn.is_visible():
+                        modal_opened = True
+                        log("✅ JS 强制点击成功，弹窗已弹出！")
+                        break
             except Exception as e:
                 log(f"❌ 点击尝试出错: {e}")
+                time.sleep(2)
 
         if not modal_opened:
             log("❌ 错误：尝试多次后，续费弹窗仍未出现。")
@@ -127,12 +121,14 @@ def renew_service(page):
             return False
 
         handle_cloudflare(page)
-        log("🖱️ 点击 'Create Invoice' 并等待发票生成跳转...")
         
+        # 定位弹窗内的 Create Invoice 按钮
+        create_btn = page.locator('button:has-text("Create Invoice"), a:has-text("Create Invoice")').first
+        log("🖱️ 点击 'Create Invoice' 并等待发票生成跳转...")
         create_btn.scroll_into_view_if_needed()
         create_btn.click(force=True)
 
-        # 核心：严格等待 URL 跳转到发票/支付详情页
+        # 严格等待 URL 跳转到发票/支付详情页
         start_wait = time.time()
         invoice_page_reached = False
         
@@ -150,7 +146,7 @@ def renew_service(page):
                 
             time.sleep(2)
 
-        # 降级方案：如果URL没变，主动尝试进入 Invoices 列表寻找未支付发票
+        # 降级兜底方案：如果没自动跳转，主动前往 Invoices 列表寻找未支付发票
         if not invoice_page_reached:
             log("⚠️ 页面未自动跳转发票页，尝试前往 Invoices 列表确认...")
             page.screenshot(path="before_invoice_check.png")
@@ -160,7 +156,6 @@ def renew_service(page):
                 invoices_nav.click()
                 time.sleep(3)
                 handle_cloudflare(page)
-                log(f"📌 当前 Invoices 列表页 URL: {page.url}")
                 
                 first_pay_btn = page.locator('a:has-text("Pay"), button:has-text("Pay"), a:has-text("Unpaid")').first
                 if first_pay_btn.is_visible():
@@ -169,13 +164,13 @@ def renew_service(page):
                     invoice_page_reached = True
 
         if not invoice_page_reached:
-            log("❌ 点击 Create Invoice 后未能进入发票页面，发票生成失败。")
+            log("❌ 未能进入发票页面，发票生成失败。")
             page.screenshot(path="renew_create_invoice_failed.png")
             return False
 
         handle_cloudflare(page)
 
-        log("🔎 查找并点击发票页的 'Pay' 按钮...")
+        log("🔎 查找并点击支付页的 'Pay' 按钮...")
         pay_btn = page.locator('button:has-text("Pay"), a:has-text("Pay"), input[value="Pay"]').first
         pay_btn.wait_for(state="visible", timeout=15000)
         
@@ -187,7 +182,7 @@ def renew_service(page):
             log("⚠️ 执行 JS 强制点击 'Pay'...")
             pay_btn.evaluate("el => el.click()")
             
-        log("✅ 'Pay' 按钮已点击。等待 5 秒等待结算完成...")
+        log("✅ 'Pay' 按钮已点击，等待 5 秒结算完成...")
         time.sleep(5)
 
         # 回到服务页确认
@@ -203,7 +198,6 @@ def renew_service(page):
 def main():
     log("🚀 启动浏览器...")
     with sync_playwright() as p:
-        # 启动浏览器（支持无头模式）
         browser = p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
@@ -216,9 +210,9 @@ def main():
 
         try:
             # 登录逻辑
+            global USE_COOKIE
             if USE_COOKIE and os.path.exists(COOKIE_FILE):
                 log("📇 尝试 Cookie 登录...")
-                import json
                 with open(COOKIE_FILE, "r") as f:
                     cookies = json.load(f)
                 context.add_cookies(cookies)
