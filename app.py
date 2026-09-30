@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os,re,sys,time,random,requests
+import os, re, sys, time, random, requests
 from playwright.sync_api import sync_playwright
 
 # --- 环境变量 ---
 COOKIE_VALUE = os.environ.get('COOKIE_VALUE') or ""    # remember_web cookie 值，必填
-EMAIL        = os.environ.get('EMAIL') or ""           # 登录邮箱,可选，作为备用,TG通知需要填写
+EMAIL        = os.environ.get('EMAIL') or ""            # 登录邮箱,可选，作为备用,TG通知需要填写
 PASSWORD     = os.environ.get('PASSWORD') or ""        # 登录密码,可选，作为备用
 TG_BOT_TOKEN = os.environ.get('TG_BOT_TOKEN') or ""    # Telegram Bot Token,可选
 TG_CHAT_ID   = os.environ.get('TG_CHAT_ID') or ""      # Telegram Chat ID,可选
@@ -33,7 +33,6 @@ def get_current_ip(proxy_server=None):
     proxies = {"http": proxy_server, "https": proxy_server} if (proxy_server and IS_PROXY) else None
     try:
         resp = requests.get("https://api.ip.sb/ip", proxies=proxies, timeout=15)
-        # log(f"请求出口IP完成, status={resp.status_code}")
         if resp.status_code == 200:
             return resp.text.strip()
         return "获取失败"
@@ -46,8 +45,7 @@ def send_telegram_notification(status, old_due, new_due):
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         log("⚠️ Telegram 未配置，跳过通知")
         return False
-    
-    # 获取运行时间
+     
     local_time = time.gmtime(time.time() + 8 * 3600)
     now = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
     if '@' in EMAIL:
@@ -173,14 +171,12 @@ def get_server_id(page):
         html = page.content()
         log(f"📝 页面长度: {len(html)}, URL: {page.url}")
 
-        # 方案1: 从 href 链接中提取 /service/数字/manage
         matches = re.findall(r'/service/(\d+)/manage', html)
         if matches:
             server_id = matches[0]
             log(f"✅ 从链接中获取到 Server ID: {server_id}")
             return server_id
 
-        # 方案2: 从 span 标签中提取 #数字 (如 "Free Server #218079")
         matches = re.findall(r'#(\d{4,})', html)
         if matches:
             server_id = matches[0]
@@ -216,16 +212,15 @@ def get_due_date(page):
     return "未知"
 
 def renew_service(page):
-
     try:
         log("➡ 进入续期流程...")
         if page.url != SERVICE_URL:
             page.goto(SERVICE_URL, wait_until="domcontentloaded", timeout=60000)
         handle_cloudflare(page)
 
-        log("🖱️ 准备点击 'Renew' 按钮...")
-        renew_btn = page.locator('button:has-text("Renew")')
-        create_btn = page.locator('button:has-text("Create Invoice")')
+        log("🖱️ 准备定位并点击 'Renew' 按钮...")
+        renew_btn = page.locator('button:has-text("Renew"), a:has-text("Renew"), [role="button"]:has-text("Renew")').first
+        create_btn = page.locator('button:has-text("Create Invoice"), a:has-text("Create Invoice")').first
 
         modal_opened = False
         for i in range(3):
@@ -233,24 +228,34 @@ def renew_service(page):
                 renew_btn.wait_for(state="visible", timeout=10000)
                 renew_btn.scroll_into_view_if_needed()
                 log(f"🖱️ 第 {i+1} 次尝试点击 'Renew'...")
-                renew_btn.click()
+                
+                renew_btn.click(force=True)
 
-                # 等待一小段时间，检测是否出现“未到续期时间”弹窗
                 time.sleep(2)
                 page_text = page.locator("body").inner_text()
                 if "Renewal Restricted" in page_text or "can only renew" in page_text.lower():
                     log("⚠️ 未到续期时间，无法续期。")
                     page.screenshot(path="renew_not_allowed.png")
-                    return "NOT_TIME"   # 特殊状态
+                    return "NOT_TIME"
 
-                log("🖲️ 等待弹窗出现...")
+                log("🖲️ 等待弹窗或发票创建按钮出现...")
                 try:
                     create_btn.wait_for(state="visible", timeout=5000)
                     modal_opened = True
                     log("✅ 弹窗已成功弹出！")
                     break
                 except:
-                    log("⚠️ 弹窗未出现，可能是点击未响应，准备重试...")
+                    log("⚠️ 弹窗未出现，尝试使用 JS 强制点击按钮...")
+                    try:
+                        renew_btn.evaluate("el => el.click()")
+                        time.sleep(2)
+                        if create_btn.is_visible():
+                            modal_opened = True
+                            log("✅ JS 强制点击成功，弹窗已弹出！")
+                            break
+                    except Exception:
+                        pass
+                    log("⚠️ 重试中...")
                     time.sleep(2)
             except Exception as e:
                 log(f"❌ 点击尝试出错: {e}")
@@ -262,7 +267,7 @@ def renew_service(page):
 
         handle_cloudflare(page)
         log("🖱️ 点击 'Create Invoice'...")
-        create_btn.click()
+        create_btn.click(force=True)
 
         new_invoice_url = None
         start_wait = time.time()
@@ -288,12 +293,10 @@ def renew_service(page):
         log("🔎 查找 'Pay' 按钮...")
         pay_btn = page.locator('a:has-text("Pay"):visible, button:has-text("Pay"):visible').first
         pay_btn.wait_for(state="visible", timeout=30000)
-        pay_btn.click()
+        pay_btn.click(force=True)
         log("✅ 'Pay' 按钮已点击。")
 
-        # 等待支付确认页面或跳转回服务页
         time.sleep(5)
-        # 返回服务管理页面以获取新的到期时间
         page.goto(SERVICE_URL, wait_until="domcontentloaded", timeout=60000)
         handle_cloudflare(page)
         return True
@@ -304,7 +307,6 @@ def renew_service(page):
         return False
 
 def main():
-    # 检查必要环境变量
     if not COOKIE_VALUE and not (EMAIL and PASSWORD):
         log("❌ 缺少登录凭证")
         sys.exit(1)
@@ -318,7 +320,6 @@ def main():
             else:
                 log("🌐 直连模式（未使用代理）")
             
-            # 获取当前出口ip
             current_ip = get_current_ip(PROXY_SERVER)
             log(f"🎯 当前出口IP: {current_ip}")
 
@@ -339,18 +340,15 @@ def main():
             if not login(page):
                 sys.exit(1)
 
-            # 登录成功后，自动获取 Server ID
             server_id = get_server_id(page)
             if not server_id:
                 log("❌ 无法获取 Server ID，退出。")
                 sys.exit(1)
             SERVICE_URL = f"{BASE_URL}/service/{server_id}/manage"
 
-            # 获取旧到期时间
             old_due = get_due_date(page)
             log(f"📆 续费前到期时间：{old_due}")
 
-            # 执行续费
             renew_result = renew_service(page)
 
             new_due = old_due
@@ -360,12 +358,11 @@ def main():
             elif renew_result is False:
                 log("❌ 续费失败，脚本退出。")
                 status = "❌ 续期失败"
-            else:  # renew_result is True
+            else: 
                 new_due = get_due_date(page)
                 log(f"📆 续费后到期时间：{new_due}")
                 status = "✅ 续期成功"
 
-            # 发送 Telegram 通知
             send_telegram_notification(status, old_due, new_due)
 
             if renew_result == "NOT_TIME":
