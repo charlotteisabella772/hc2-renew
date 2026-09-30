@@ -271,7 +271,6 @@ def renew_service(page):
         new_invoice_url = None
         context = page.context
         
-        # 尝试通过监听新标签页或者当前页跳转来捕获发票链接
         try:
             with context.expect_page(timeout=5000) as new_page_info:
                 create_btn.click(force=True)
@@ -298,7 +297,7 @@ def renew_service(page):
                     break
                     
                 if page.locator('iframe[src*="challenges.cloudflare.com"]').count() > 0:
-                    log("⚠️️ 遇到 Cloudflare 拦截，尝试处理...")
+                    log("⚠️ 遇到 Cloudflare 拦截，尝试处理...")
                     handle_cloudflare(page)
                 time.sleep(2)
 
@@ -314,7 +313,16 @@ def renew_service(page):
         log("🔎 查找并点击 'Pay' 按钮...")
         pay_btn = page.locator('a:has-text("Pay"):visible, button:has-text("Pay"):visible, input[value="Pay"]:visible').first
         pay_btn.wait_for(state="visible", timeout=30000)
-        pay_btn.click(force=True)
+        
+        # 💡 关键修复：强制滚动至可视区域，并增加异常降级JS点击
+        pay_btn.scroll_into_view_if_needed()
+        time.sleep(1)
+        try:
+            pay_btn.click(force=True)
+        except Exception:
+            log("⚠️ 常规点击失败，执行 JS 强制点击 'Pay'...")
+            pay_btn.evaluate("el => el.click()")
+            
         log("✅ 'Pay' 按钮已点击。")
 
         time.sleep(5)
