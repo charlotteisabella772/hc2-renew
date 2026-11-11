@@ -766,7 +766,16 @@ def renew_service(page):
                 log(f"🖱️ 点击 Create Invoice（第 {attempt + 1} 次）...")
                 try:
                     create_btn.wait_for(state="visible", timeout=30000)
-                    create_btn.click(timeout=20000)
+                    # ncmp 横幅 (#ncmp__tool) 会挡住按钮，先把它去掉，否则 click 会被拦截
+                    try:
+                        page.evaluate("() => { const el = document.getElementById('ncmp__tool'); if (el) el.remove(); }")
+                    except Exception:
+                        pass
+                    try:
+                        create_btn.click(timeout=10000)
+                    except Exception:
+                        # 普通点击被遮挡时强制点击
+                        create_btn.click(timeout=10000, force=True)
                 except Exception as e:
                     log(f"⚠️ 点击 Create Invoice 失败: {e}")
                     solve_modal_turnstile(page, timeout=45)
