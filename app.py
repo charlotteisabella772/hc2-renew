@@ -64,7 +64,7 @@ def get_current_ip(proxy_server=None):
         log(f"❌ 获取出口IP失败: {e}")
         return "获取失败"
 
-def send_telegram_notification(status, old_due, new_due, current_ip="未知"):
+def send_telegram_notification(status, old_due="未知", new_due="未知", current_ip="未知"):
     """发送 Telegram 通知"""
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         log("⚠️ Telegram 未配置，跳过通知")
@@ -374,22 +374,23 @@ def open_browser(p):
         browser = p.chromium.launch(
             channel="chrome",
             headless=False,
-            args=['--disable-infobars'],
+            args=['--disable-infobars', '--ignore-certificate-errors'],
             proxy=proxy_arg,
         )
-        ctx = browser.new_context(viewport=None, proxy=proxy_arg)
+        ctx = browser.new_context(viewport=None, proxy=proxy_arg, ignore_https_errors=True)
         page = ctx.new_page()
         return browser, page
     log("⚠️ 未安装 patchright（建议 pip install patchright），退回原生 playwright，过 Cloudflare 能力较弱")
     browser = p.chromium.launch(
         channel="chrome",
         headless=False,
-        args=['--no-sandbox', '--disable-blink-features=AutomationControlled', '--disable-infobars']
+        args=['--no-sandbox', '--disable-blink-features=AutomationControlled', '--disable-infobars', '--ignore-certificate-errors']
     )
     ctx = browser.new_context(
         viewport={'width': 1920, 'height': 1080},
         user_agent=DEFAULT_UA,
         proxy=proxy_arg,
+        ignore_https_errors=True,
     )
     page = ctx.new_page()
     page.add_init_script(STEALTH_JS)
