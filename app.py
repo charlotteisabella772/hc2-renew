@@ -693,11 +693,47 @@ def get_server_id(page):
         page.screenshot(path="server_id_error.png")
         return None
 
-def get_due_date(page):
+def goto_service_page(page):
+    """进服务器管理页：先直接打开 /service/<id>/manage；
+    如果被跳回 dashboard（2026-11-15 实测就是这样），改从 dashboard 点服务行 → Manage 进去。"""
+    # 1) 直接打开
     try:
-        if SERVICE_URL not in page.url:
+        if SERVICE_URL not in (page.url or ""):
             page.goto(SERVICE_URL, wait_until="domcontentloaded", timeout=60000)
         handle_cloudflare(page)
+        time.sleep(3)
+        log(f"🔍 直接打开后 URL: {page.url}")
+        if str(SERVER_ID_FIXED) in (page.url or ""):
+            return True
+    except Exception as e:
+        log(f"⚠️ 直接打开服务页失败: {e}")
+    # 2) 从 dashboard 点进去
+    try:
+        log("🖱️ 直接打开被跳回，改从 Dashboard 点 Manage 进去...")
+        page.goto(f"{BASE_URL}/dashboard", wait_until="domcontentloaded", timeout=60000)
+        handle_cloudflare(page)
+        time.sleep(3)
+        # 点开服务行（展开详情，出现 Manage 按钮）
+        try:
+            page.locator(f'text=Free Server #{SERVER_ID_FIXED}').first.click(timeout=10000)
+            time.sleep(2)
+        except Exception as e:
+            log(f"⚠️ 点击服务行失败: {e}")
+        manage_btn = page.locator('button:has-text("Manage"), a:has-text("Manage")').first
+        manage_btn.wait_for(state="visible", timeout=15000)
+        manage_btn.click()
+        time.sleep(3)
+        handle_cloudflare(page)
+        log(f"🔍 点 Manage 后 URL: {page.url}")
+        return str(SERVER_ID_FIXED) in (page.url or "")
+    except Exception as e:
+        log(f"❌ 从 Dashboard 点 Manage 也失败: {e}")
+        page.screenshot(path="goto_service_failed.png")
+        return False
+
+def get_due_date(page):
+    try:
+        goto_service_page(page)
         body_text = page.locator("body").inner_text()
         patterns = [
             r"Due date\s+(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})",
@@ -721,12 +757,11 @@ def renew_service(page):
         for renew_round in range(3):
             if renew_round > 0:
                 log(f"🔄 开始第 {renew_round + 1} 轮续期重试...")
-            if page.url != SERVICE_URL or "/auth/login" in (page.url or ""):
-                page.goto(SERVICE_URL, wait_until="domcontentloaded", timeout=60000)
-            handle_cloudflare(page)
+            goto_service_page(page)
             time.sleep(12) # 等待续期页面完全加载,未完全加载无法点击
+            log(f"🔍 续期页面 URL: {page.url}")
             log("🖱️ 准备点击 Renew 按钮...")
-            renew_btn = page.locator('button:has-text("Renew")')
+            renew_btn = page.locator('button:has-text("Renew"), a:has-text("Renew")').first
             create_btn = page.locator('button:has-text("Create Invoice")')
             modal_opened = False
             for i in range(6):
