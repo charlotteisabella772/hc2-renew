@@ -18,6 +18,10 @@ except ImportError:
 EMAIL         = os.environ.get('EMAIL') or ""            # 登录邮箱（仅 TG 通知用）
 REGION        = os.environ.get('REGION') or "🎉"         # 地区,（仅 TG 通知用）, 可填写emoji示例：🇸🇬  🇦🇪  🇦🇺  🇲🇽  🇫🇷  🇮🇳  🇺🇸 
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN') or ""    # Discord Token，必填！用于Discord OAuth登录（站点要求免费服务续期必须Discord登录）
+# 固定 Server ID：hc2-renew 对应的是 Free Server #232643
+# （到期 2026-11-19）。之前动态抓取会抓错，改成写死避免再抓错。
+# 可用 Secrets 里 SERVER_ID 覆盖。
+SERVER_ID_FIXED = os.environ.get('SERVER_ID') or "232643"
 TG_CHAT_ID    = os.environ.get('TG_CHAT_ID') or ""       # Telegram Chat ID,可选
 TG_BOT_TOKEN  = os.environ.get('TG_BOT_TOKEN') or ""     # Telegram Bot Token,可选
 
@@ -651,6 +655,10 @@ def login(page):
     #     return False
 
 def get_server_id(page):
+    # 优先用写死的 Server ID，不再靠页面猜，避免抓到发票/订单号之类的 #数字
+    if SERVER_ID_FIXED:
+        log(f"✅ 使用固定 Server ID: {SERVER_ID_FIXED}")
+        return SERVER_ID_FIXED
     try:
         if 'dash.hidencloud.com' not in page.url:
             log("⚠️ 当前不在控制台页面，先跳转 dashboard...")
@@ -748,6 +756,12 @@ def renew_service(page):
 
             if not modal_opened:
                 log("❌ 错误：尝试多次后，续费弹窗仍未出现。")
+                try:
+                    btns = page.evaluate("() => Array.from(document.querySelectorAll('button')).map(b => (b.innerText || '').trim()).filter(t => t && t.length < 40)")
+                    log(f"🔍 当前页面按钮: {btns}")
+                    log(f"🔍 当前页面 URL: {page.url}")
+                except Exception:
+                    pass
                 page.screenshot(path="renew_modal_failed.png")
                 return False
 
